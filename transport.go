@@ -801,12 +801,12 @@ func (pc *persistConn) readLoop() {
 		if err == nil {
 			resp, err = ReadResponse(pc.br, rc.req)
 			if err == nil && resp.StatusCode == 100 {
-				// Skip any 100-continue for now.
-				// TODO(bradfitz): if rc.req had "Expect: 100-continue",
-				// actually block the request body write and signal the
-				// writeLoop now to begin sending it. (Issue 2184) For now we
-				// eat it, since we're never expecting one.
-				resp, err = ReadResponse(pc.br, rc.req)
+				pc.lk.Lock()
+				pc.numExpectedResponses++
+				pc.lk.Unlock()
+
+				rc.ch <- responseAndError{resp, nil}
+				break
 			}
 		}
 
@@ -1006,10 +1006,22 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 	resc := make(chan responseAndError, 1)
 	pc.reqch <- requestAndChan{req.Request, resc, requestedGzip}
 
+	res, err := pc.readResponse(writeErrCh, resc)
+	if err != nil {
+		pc.t.setReqCanceler(req.Request, nil)
+	} else {
+		res.NextResponse = pc.nextResponseFunc(req, requestedGzip)
+	}
+
+	return res, err
+}
+
+func (pc *persistConn) readResponse(writeErrCh <-chan error, resc <-chan responseAndError) (resp *Response, err error) {
 	var re responseAndError
 	var pconnDeadCh = pc.closech
 	var failTicker <-chan time.Time
 	var respHeaderTimer <-chan time.Time
+
 WaitResponse:
 	for {
 		select {
@@ -1053,10 +1065,29 @@ WaitResponse:
 	pc.numExpectedResponses--
 	pc.lk.Unlock()
 
-	if re.err != nil {
-		pc.t.setReqCanceler(req.Request, nil)
-	}
 	return re.res, re.err
+}
+
+func (pc *persistConn) nextResponseFunc(req *transportRequest, requestedGzip bool) func() (*Response, error) {
+	return func() (*Response, error) {
+		if pc.numExpectedResponses == 0 {
+			return nil, nil
+		}
+
+		go pc.readLoop()
+
+		writeErrCh := make(chan error, 1)
+
+		resc := make(chan responseAndError, 1)
+		pc.reqch <- requestAndChan{req.Request, resc, requestedGzip}
+
+		res, err := pc.readResponse(writeErrCh, resc)
+		if res != nil {
+			res.NextResponse = pc.nextResponseFunc(req, requestedGzip)
+		}
+
+		return res, err
+	}
 }
 
 // markBroken marks a connection as broken (so it's not reused).

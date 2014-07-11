@@ -83,6 +83,11 @@ type Response struct {
 	// The pointer is shared between responses and should not be
 	// modified.
 	TLS *tls.ConnectionState
+
+	// NextResponse returns the follow up response for a request that
+	// generates multiple server response (for example, a 100 Continue
+	// followed on by a 200 OK).
+	NextResponse func() (*Response, error)
 }
 
 // Cookies parses and returns the cookies set in the Set-Cookie headers.
