@@ -4,7 +4,7 @@
 
 // HTTP file system request handler
 
-package http
+package httplus
 
 import (
 	"errors"

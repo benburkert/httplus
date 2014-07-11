@@ -4,7 +4,7 @@
 
 // Tests for transport.go
 
-package http_test
+package httplus_test
 
 import (
 	"bufio"

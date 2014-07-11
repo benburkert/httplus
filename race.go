@@ -4,7 +4,7 @@
 
 // +build race
 
-package http
+package httplus
 
 func init() {
 	raceEnabled = true
