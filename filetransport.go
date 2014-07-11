@@ -101,6 +101,10 @@ func (pr *populateResponse) Header() Header {
 	return pr.res.Header
 }
 
+func (pr *populateResponse) ContinueHeader() Header {
+	return nil
+}
+
 func (pr *populateResponse) WriteHeader(code int) {
 	if pr.wroteHeader {
 		return

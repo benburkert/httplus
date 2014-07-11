@@ -54,6 +54,11 @@ type ResponseWriter interface {
 	// no effect.
 	Header() Header
 
+	// ContinueHeader returns the header map for the 100 Continue response.
+	// Added headers will be included in the 100 Continue response but not
+	// the primary response.
+	ContinueHeader() Header
+
 	// Write writes the data to the connection as part of an HTTP reply.
 	// If WriteHeader has not yet been called, Write calls WriteHeader(http.StatusOK)
 	// before writing the data.  If the Header does not contain a
@@ -305,6 +310,8 @@ type response struct {
 	handlerHeader Header
 	calledHeader  bool // handler accessed handlerHeader via Header
 
+	continueHeader Header
+
 	written       int64 // number of bytes written in body
 	contentLength int64 // explicitly-declared Content-Length; or -1
 	status        int   // status code passed to WriteHeader
@@ -516,7 +523,9 @@ func (ecr *expectContinueReader) Read(p []byte) (n int, err error) {
 	}
 	if !ecr.resp.wroteContinue && !ecr.resp.conn.hijacked() {
 		ecr.resp.wroteContinue = true
-		ecr.resp.conn.buf.WriteString("HTTP/1.1 100 Continue\r\n\r\n")
+		ecr.resp.conn.buf.WriteString("HTTP/1.1 100 Continue\r\n")
+		ecr.resp.continueHeader.Write(ecr.resp.conn.buf)
+		ecr.resp.conn.buf.WriteString("\r\n")
 		ecr.resp.conn.buf.Flush()
 	}
 	return ecr.readCloser.Read(p)
@@ -586,10 +595,11 @@ func (c *conn) readRequest() (w *response, err error) {
 	req.TLS = c.tlsState
 
 	w = &response{
-		conn:          c,
-		req:           req,
-		handlerHeader: make(Header),
-		contentLength: -1,
+		conn:           c,
+		req:            req,
+		handlerHeader:  make(Header),
+		continueHeader: make(Header),
+		contentLength:  -1,
 	}
 	w.cw.res = w
 	w.w = newBufioWriterSize(&w.cw, bufferBeforeChunkingSize)
@@ -605,6 +615,10 @@ func (w *response) Header() Header {
 	}
 	w.calledHeader = true
 	return w.handlerHeader
+}
+
+func (w *response) ContinueHeader() Header {
+	return w.continueHeader
 }
 
 // maxPostHandlerReadBytes is the max number of Request.Body bytes not
@@ -1160,7 +1174,6 @@ func (c *conn) serve() {
 				// Wrap the Body reader with one that replies on the connection
 				req.Body = &expectContinueReader{readCloser: req.Body, resp: w}
 			}
-			req.Header.Del("Expect")
 		} else if req.Header.get("Expect") != "" {
 			w.sendExpectationFailed()
 			break
@@ -1912,6 +1925,10 @@ type timeoutWriter struct {
 
 func (tw *timeoutWriter) Header() Header {
 	return tw.w.Header()
+}
+
+func (tw *timeoutWriter) ContinueHeader() Header {
+	return tw.w.ContinueHeader()
 }
 
 func (tw *timeoutWriter) Write(p []byte) (int, error) {
